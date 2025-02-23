@@ -1,5 +1,12 @@
 /*
- * To compile and run this program: g++ homework02.cpp -o homework02 && ./homework02
+ * To compile and run this program: g++ homework02.cpp -std=c++14 -o homework02 && ./homework02
+ *
+ * **第一个问题**，为什么有些行IP地址是空的呢？这里面有几个原因，我看大家作业回答的基本差不多了，我再总结一下：
+ * 1. 在tshark中，-e ip.src -e ip.dst参数输出的是IPv4的源IP和目的IP，
+ *    而如果遇到的是一个IPv6的数据报文，tshark输出的就会变成空了。
+ *    想要解决这个问题，就需要同时指定 `-e ip.src -e ipv6.src -e ip.dst ipv6.dst`。
+ *    然后在解析的时候，两个字段都要解析，哪个不为空，就取哪个作为数据包的源地址。
+ * 2. 有些数据包本身就没有网络层的，比如ARP，当然也就没有IP地址了。
 */
 #include <iostream>
 #include <cstdio>
@@ -17,6 +24,8 @@ struct Packet {
     std::string time;            // 数据包的时间戳
     std::string src_ip;          // 源IP地址
     std::string dst_ip;          // 目的IP地址
+    int src_port;        // 源Port
+    int dst_port;        // 目的Port
     std::string protocol;        // 协议
     std::string info;            // 数据包的概要信息
 };
@@ -28,7 +37,7 @@ int main() {
     // To get the capture file, in linux os, run: `sudo tshark -i Mihomo -c 50 -w - | tee capture.pcap`
     // or `sudo tshark -i Mihomo -c 50 -w - |& tee capture.pcap`
     // const char* command = "tshark -r capture.pcap";
-    const char* command = "tshark -r capture.pcap -T fields -e frame.number -e frame.time -e ip.src -e ip.dst -e _ws.col.Protocol -e _ws.col.Info";
+    const char* command = "tshark -r capture.pcap  -T fields -e frame.number -e frame.time -e ip.src -e ipv6.src -e ip.dst -e ipv6.dst -e tcp.srcport -e udp.srcport -e tcp.dstport -e udp.dstport -e _ws.col.Protocol -e _ws.col.Info";
     FILE* pipe = popen(command, "r");
     if (!pipe) {
         std::cerr << "Failed to run tshark command!" << std::endl;
@@ -77,13 +86,34 @@ void parseLine(std::string line, Packet& packet) {
         fields.push_back(field);
     }
 
-    if (fields.size() >= 6) {
+    // 字段顺序：
+    // 0: frame.number
+    // 1: frame.time
+    // 2: ip.src
+    // 3: ipv6.src
+    // 4: ip.dst
+    // 5: ipv6.dst
+    // 6: tcp.srcport
+    // 7: udp.srcport
+    // 8: tcp.dstport
+    // 9: udp.dstport
+    // 10: _ws.col.Protocol
+    // 11: _ws.col.Info
+
+    if (fields.size() >= 12) {
         packet.frame_number = std::stoi(fields[0]);
         packet.time = fields[1];
-        packet.src_ip = fields[2];
-        packet.dst_ip = fields[3];
-        packet.protocol = fields[4];
-        packet.info = fields[5];
+        packet.src_ip = fields[2].empty() ? fields[3] : fields[2];
+        packet.dst_ip = fields[4].empty() ? fields[5] : fields[4];
+        if (!fields[6].empty() || !fields[7].empty()) {
+            packet.src_port = std::stoi(fields[6].empty() ? fields[7] : fields[6]);
+        }
+
+        if (!fields[8].empty() || !fields[9].empty()) {
+            packet.dst_port = std::stoi(fields[8].empty() ? fields[9] : fields[8]);
+        }
+        packet.protocol = fields[10];
+        packet.info = fields[11];
     }
 }
 
@@ -102,6 +132,8 @@ void printPacket(const Packet &packet) {
     pktObj.AddMember("timestamp", rapidjson::Value(packet.time.c_str(), allocator), allocator);
     pktObj.AddMember("src_ip", rapidjson::Value(packet.src_ip.c_str(), allocator), allocator);
     pktObj.AddMember("dst_ip", rapidjson::Value(packet.dst_ip.c_str(), allocator), allocator);
+    pktObj.AddMember("src_port", packet.src_port, allocator);
+    pktObj.AddMember("dst_port", packet.dst_port, allocator);
     pktObj.AddMember("protocol", rapidjson::Value(packet.protocol.c_str(), allocator), allocator);
     pktObj.AddMember("info", rapidjson::Value(packet.info.c_str(), allocator), allocator);
 
